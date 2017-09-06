@@ -3209,6 +3209,110 @@ func TestNodeWithSmallerTermCanCompleteElection(t *testing.T) {
 	}
 }
 
+func TestPreVoteMigration(t *testing.T) {
+	n1 := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
+	n2 := newTestRaft(2, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
+	n3 := newTestRaft(3, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
+
+	n1.becomeFollower(1, None)
+	n2.becomeFollower(1, None)
+	n3.becomeFollower(1, None)
+
+	n1.preVote = true
+	n2.preVote = true
+	// We intentionally do not enable PreVote for n3, this is done so in order
+	// to simulate a rolling restart process where it's possible to have a
+	// mixed version cluster with replicas with PreVote enabled, and replicas
+	// without.
+
+	nt := newNetwork(n1, n2, n3)
+	nt.send(pb.Message{From: 1, To: 1, Type: pb.MsgHup})
+	if n1.state != StateLeader {
+		t.Errorf("node 1 state: %s, want %s", n1.state, StateLeader)
+	}
+
+	if n2.state != StateFollower {
+		t.Errorf("node 2 state: %s, want %s", n2.state, StateFollower)
+	}
+
+	if n3.state != StateFollower {
+		t.Errorf("node 3 state: %s, want %s", n3.state, StateFollower)
+	}
+
+	// Cause a network partition to isolate n3.
+	nt.cut(1, 3)
+	nt.cut(2, 3)
+
+	nt.send(pb.Message{From: 1, To: 1, Type: pb.MsgProp, Entries: []pb.Entry{{Data: []byte("some data")}}})
+	nt.send(pb.Message{From: 1, To: 1, Type: pb.MsgProp, Entries: []pb.Entry{{Data: []byte("some data")}}})
+	nt.send(pb.Message{From: 1, To: 1, Type: pb.MsgProp, Entries: []pb.Entry{{Data: []byte("some data")}}})
+
+	// Check whether the term values are expected:
+	//  n1.Term == 2
+	//  n2.Term == 2
+	//  n3.Term == 2
+	if n1.Term != 2 {
+		t.Errorf("node 1 term: %d, want %d", n1.Term, 2)
+	}
+
+	if n2.Term != 2 {
+		t.Errorf("node 2 term: %d, want %d", n2.Term, 2)
+	}
+
+	if n3.Term != 2 {
+		t.Errorf("node 3 term: %d, want %d", n3.Term, 2)
+	}
+
+	nt.send(pb.Message{From: 3, To: 3, Type: pb.MsgHup})
+	// Check state and term for n3:
+	//  n3.Term == 3
+	//  n3.state == StateCandidate
+	if n3.Term != 3 {
+		t.Errorf("node 3 term: %d, want %d", n3.Term, 3)
+	}
+	if n3.state != StateCandidate {
+		t.Errorf("node 3 state: %s, want %s", n3.state, StateCandidate)
+	}
+
+	// Check state for n1, n2:
+	//  n1.state. == Leader
+	//  n2.state. == Follower
+	if n1.state != StateLeader {
+		t.Errorf("node 1 state: %s, want %s", n1.state, StateLeader)
+	}
+	if n2.state != StateFollower {
+		t.Errorf("node 2 state: %s, want %s", n2.state, StateFollower)
+	}
+	prevLeaderTerm := n1.Term
+
+	n1.logger.Info("going to bring back peer 3 with prevote enabled, kill peer 2")
+
+	// Enable prevote on n3.
+	n3.preVote = true
+
+	// Recover the network then immediately isolate n2 which is currently
+	// the leader, this is to emulate the crash of n2.
+	nt.recover()
+	nt.cut(2, 1)
+	nt.cut(2, 3)
+
+	// Call for elections from both n1 and n3.
+	nt.send(pb.Message{From: 3, To: 3, Type: pb.MsgHup})
+	nt.send(pb.Message{From: 1, To: 1, Type: pb.MsgHup})
+
+	// n1's term should have advanced, the earlier proposed entries having been
+	// persisted on n1 and n2 while n3 was partitioned away necessitate that
+	// only n1 can be the leader and it has to do so for a subsequent term.
+	if n1.Term == prevLeaderTerm {
+		t.Errorf("node 1 term: %d, expected to advance", prevLeaderTerm)
+	}
+
+	// Do we have a leader?
+	if n1.state != StateLeader && n3.state != StateFollower {
+		t.Errorf("no leader")
+	}
+}
+
 // TestPreVoteWithSplitVote verifies that after split vote, cluster can complete
 // election in next round.
 func TestPreVoteWithSplitVote(t *testing.T) {
