@@ -614,7 +614,7 @@ func (r *raft) becomePreCandidate() {
 	r.votes = make(map[uint64]bool)
 	r.tick = r.tickElection
 	r.state = StatePreCandidate
-	r.logger.Infof("%x became pre-candidate at term %d", r.id, r.Term)
+	r.logger.Infof("%x became pre-candidate at term %d for term %d", r.id, r.Term, r.Term+1)
 }
 
 func (r *raft) becomeLeader() {
@@ -671,8 +671,7 @@ func (r *raft) campaign(t CampaignType) {
 		if id == r.id {
 			continue
 		}
-		r.logger.Infof("%x [logterm: %d, index: %d] sent %s request to %x at term %d",
-			r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), voteMsg, id, r.Term)
+		r.logger.Infof("%x [logterm: %d, index: %d] sent %s request to %x at term %d for term %d", r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), voteMsg, id, r.Term, term)
 
 		var ctx []byte
 		if t == campaignTransfer {
