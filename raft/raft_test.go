@@ -3136,61 +3136,55 @@ func TestNodeWithSmallerTermCanCompleteElection(t *testing.T) {
 
 	nt.send(pb.Message{From: 1, To: 1, Type: pb.MsgHup})
 
-	sm := nt.peers[1].(*raft)
-	if sm.state != StateLeader {
-		t.Errorf("peer 1 state: %s, want %s", sm.state, StateLeader)
+	if n1.state != StateLeader {
+		t.Errorf("peer 1 state: %s, want %s", n1.state, StateLeader)
 	}
 
-	sm = nt.peers[2].(*raft)
-	if sm.state != StateFollower {
-		t.Errorf("peer 2 state: %s, want %s", sm.state, StateFollower)
+	if n2.state != StateFollower {
+		t.Errorf("peer 2 state: %s, want %s", n2.state, StateFollower)
 	}
 
 	nt.send(pb.Message{From: 3, To: 3, Type: pb.MsgHup})
-	sm = nt.peers[3].(*raft)
-	if sm.state != StatePreCandidate {
-		t.Errorf("peer 3 state: %s, want %s", sm.state, StatePreCandidate)
+	if n3.state != StatePreCandidate {
+		t.Errorf("peer 3 state: %s, want %s", n3.state, StatePreCandidate)
 	}
 
 	nt.send(pb.Message{From: 2, To: 2, Type: pb.MsgHup})
+	if n2.state != StateLeader {
+		t.Errorf("peer 2 state: %s, want %s", n2.state, StateLeader)
+	}
 
 	// check whether the term values are expected
 	// a.Term == 3
 	// b.Term == 3
 	// c.Term == 1
-	sm = nt.peers[1].(*raft)
-	if sm.Term != 3 {
-		t.Errorf("peer 1 term: %d, want %d", sm.Term, 3)
+	if n1.Term != 3 {
+		t.Errorf("peer 1 term: %d, want %d", n1.Term, 3)
 	}
 
-	sm = nt.peers[2].(*raft)
-	if sm.Term != 3 {
-		t.Errorf("peer 2 term: %d, want %d", sm.Term, 3)
+	if n2.Term != 3 {
+		t.Errorf("peer 2 term: %d, want %d", n2.Term, 3)
 	}
 
-	sm = nt.peers[3].(*raft)
-	if sm.Term != 1 {
-		t.Errorf("peer 3 term: %d, want %d", sm.Term, 1)
+	if n3.Term != 1 {
+		t.Errorf("peer 3 term: %d, want %d", n3.Term, 1)
 	}
 
 	// check state
 	// a == follower
 	// b == leader
 	// c == pre-candidate
-	sm = nt.peers[1].(*raft)
-	if sm.state != StateFollower {
-		t.Errorf("peer 1 state: %s, want %s", sm.state, StateFollower)
+	if n1.state != StateFollower {
+		t.Errorf("peer 1 state: %s, want %s", n1.state, StateFollower)
 	}
-	sm = nt.peers[2].(*raft)
-	if sm.state != StateLeader {
-		t.Errorf("peer 2 state: %s, want %s", sm.state, StateLeader)
+	if n2.state != StateLeader {
+		t.Errorf("peer 2 state: %s, want %s", n1.state, StateLeader)
 	}
-	sm = nt.peers[3].(*raft)
-	if sm.state != StatePreCandidate {
-		t.Errorf("peer 3 state: %s, want %s", sm.state, StatePreCandidate)
+	if n3.state != StatePreCandidate {
+		t.Errorf("peer 3 state: %s, want %s", n3.state, StatePreCandidate)
 	}
 
-	sm.logger.Infof("going to bring back peer 3 and kill peer 2")
+	n1.logger.Infof("going to bring back peer 3 and kill peer 2")
 	// recover the network then immediately isolate b which is currently
 	// the leader, this is to emulate the crash of b.
 	nt.recover()
@@ -3202,14 +3196,14 @@ func TestNodeWithSmallerTermCanCompleteElection(t *testing.T) {
 	nt.send(pb.Message{From: 1, To: 1, Type: pb.MsgHup})
 
 	// do we have a leader?
-	sma := nt.peers[1].(*raft)
-	smb := nt.peers[3].(*raft)
-	if sma.state != StateLeader && smb.state != StateLeader {
+	if n1.state != StateLeader && n3.state != StateLeader {
 		t.Errorf("no leader")
 	}
 }
 
 func TestPreVoteMigration(t *testing.T) {
+	t.Skip()
+
 	n1 := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
 	n2 := newTestRaft(2, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
 	n3 := newTestRaft(3, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())

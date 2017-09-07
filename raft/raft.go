@@ -355,29 +355,30 @@ func (r *raft) nodes() []uint64 {
 // send persists state to stable storage and then sends to its mailbox.
 func (r *raft) send(m pb.Message) {
 	m.From = r.id
-	if m.Type == pb.MsgVote || m.Type == pb.MsgVoteResp || m.Type == pb.MsgPreVote || m.Type == pb.MsgPreVoteResp {
+	if m.Type == pb.MsgVote || m.Type == pb.MsgVoteResp {
 		if m.Term == 0 {
 			// All {pre-,}campaign messages need to have the term set when
 			// sending.
 			// - MsgVote: m.Term is the term the node is campaigning for,
 			//   non-zero as we increment the term when campaigning.
 			// - MsgVoteResp: m.Term is the new r.Term if the MsgVote was
-			//   granted, non-zero for the same reason MsgVote is
-			// - MsgPreVote: m.Term is the term the node will campaign,
-			//   non-zero as we use m.Term to indicate the next term we'll be
-			//   campaigning for
-			// - MsgPreVoteResp: m.Term is the term received in the original
-			//   MsgPreVote if the pre-vote was granted, non-zero for the
-			//   same reasons MsgPreVote is
+			//   granted, non-zero for the same reason MsgVote is.
 			panic(fmt.Sprintf("term should be set when sending %s", m.Type))
 		}
+	} else if m.Type == pb.MsgPreVote || m.Type == pb.MsgPreVoteResp {
+		// Pre-Campaign messages need not have the term set when sending.
+		// - MsgPreVote: m.Term is the term of the node pre-campaigning. This
+		//   could very well be zero or non-zero if it is pre-campaigning for
+		//   the very first term or for a term in the future.
+		// - MsgPreVoteResp: m.Term is the term received in the original
+		//   MsgPreVote if the pre-vote was granted, zero or non-zero for the
+		//   same reasons MsgPreVote is.
 	} else {
 		if m.Term != 0 {
 			panic(fmt.Sprintf("term should not be set when sending %s (was %d)", m.Type, m.Term))
 		}
-		// do not attach term to MsgProp, MsgReadIndex
-		// proposals are a way to forward to the leader and
-		// should be treated as local message.
+		// Do not attach term to MsgProp, MsgReadIndex proposals are a way to
+		// forward to the leader and should be treated as local message.
 		// MsgReadIndex is also forwarded to leader.
 		if m.Type != pb.MsgProp && m.Type != pb.MsgReadIndex {
 			m.Term = r.Term
@@ -611,7 +612,8 @@ func (r *raft) becomePreCandidate() {
 	// but doesn't change anything else. In particular it does not increase
 	// r.Term or change r.Vote.
 	r.step = stepCandidate
-	r.votes = make(map[uint64]bool)
+	// FIXME(irfansharif): Why not use r.reset(r.Term)?
+	r.reset(r.Term)
 	r.tick = r.tickElection
 	r.state = StatePreCandidate
 	r.logger.Infof("%x became pre-candidate at term %d for term %d", r.id, r.Term, r.Term+1)
@@ -645,17 +647,16 @@ func (r *raft) becomeLeader() {
 }
 
 func (r *raft) campaign(t CampaignType) {
-	var term uint64
 	var voteMsg pb.MessageType
 	if t == campaignPreElection {
+		// FIXME(irfansharif): PreVote RPCs are sent for the next term before
+		// we've incremented r.Term but m.Term still is r.Term. The receiver on
+		// the other end knows this.
 		r.becomePreCandidate()
 		voteMsg = pb.MsgPreVote
-		// PreVote RPCs are sent for the next term before we've incremented r.Term.
-		term = r.Term + 1
 	} else {
 		r.becomeCandidate()
 		voteMsg = pb.MsgVote
-		term = r.Term
 	}
 	if r.quorum() == r.poll(r.id, voteRespMsgType(voteMsg), true) {
 		// We won the election after voting for ourselves (which must mean that
@@ -671,13 +672,13 @@ func (r *raft) campaign(t CampaignType) {
 		if id == r.id {
 			continue
 		}
-		r.logger.Infof("%x [logterm: %d, index: %d] sent %s request to %x at term %d for term %d", r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), voteMsg, id, r.Term, term)
+		r.logger.Infof("%x [logterm: %d, index: %d] sent %s request to %x at term %d", r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), voteMsg, id, r.Term)
 
 		var ctx []byte
 		if t == campaignTransfer {
 			ctx = []byte(t)
 		}
-		r.send(pb.Message{Term: term, To: id, Type: voteMsg, Index: r.raftLog.lastIndex(), LogTerm: r.raftLog.lastTerm(), Context: ctx})
+		r.send(pb.Message{Term: r.Term, To: id, Type: voteMsg, Index: r.raftLog.lastIndex(), LogTerm: r.raftLog.lastTerm(), Context: ctx})
 	}
 }
 
@@ -717,20 +718,9 @@ func (r *raft) Step(m pb.Message) error {
 			}
 			lead = None
 		}
-		switch {
-		case m.Type == pb.MsgPreVote:
-			// Never change our term in response to a PreVote
-		case m.Type == pb.MsgPreVoteResp && !m.Reject:
-			// We send pre-vote requests with a term in our future. If the
-			// pre-vote is granted, we will increment our term when we get a
-			// quorum. If it is not, the term comes from the node that
-			// rejected our vote so we should become a follower at the new
-			// term.
-		default:
-			r.logger.Infof("%x [term: %d] received a %s message with higher term from %x [term: %d]",
-				r.id, r.Term, m.Type, m.From, m.Term)
-			r.becomeFollower(m.Term, lead)
-		}
+		r.logger.Infof("%x [term: %d] received a %s message with higher term from %x [term: %d]",
+			r.id, r.Term, m.Type, m.From, m.Term)
+		r.becomeFollower(m.Term, lead)
 
 	case m.Term < r.Term:
 		if r.checkQuorum && (m.Type == pb.MsgHeartbeat || m.Type == pb.MsgApp) {
@@ -779,9 +769,11 @@ func (r *raft) Step(m pb.Message) error {
 		}
 
 	case pb.MsgVote, pb.MsgPreVote:
-		// The m.Term > r.Term clause is for MsgPreVote. For MsgVote m.Term should
-		// always equal r.Term.
-		if (r.Vote == None || m.Term > r.Term || r.Vote == m.From) && r.raftLog.isUpToDate(m.Index, m.LogTerm) {
+		if r.Term != m.Term {
+			panic(fmt.Sprintf("r.Term != m.Term: %d != %d", r.Term, m.Term))
+		}
+		// FIXME(irfansharif): Talk about why we're ok with granting pre-votes.
+		if (r.Vote == None || r.Vote == m.From || m.Type == pb.MsgPreVote) && r.raftLog.isUpToDate(m.Index, m.LogTerm) {
 			r.logger.Infof("%x [logterm: %d, index: %d, vote: %x] cast %s for %x [logterm: %d, index: %d] at term %d",
 				r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), r.Vote, m.Type, m.From, m.LogTerm, m.Index, r.Term)
 			// When responding to Msg{Pre,}Vote messages we include the term

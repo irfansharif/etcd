@@ -31,7 +31,7 @@ func TestRawNodeStep(t *testing.T) {
 			t.Fatal(err)
 		}
 		msgt := raftpb.MessageType(i)
-		err = rawNode.Step(raftpb.Message{Type: msgt})
+		err = rawNode.Step(raftpb.Message{Type: msgt, Term: 1})
 		// LocalMsg should be ignored.
 		if IsLocalMsg(msgt) {
 			if err != ErrStepLocalMsg {

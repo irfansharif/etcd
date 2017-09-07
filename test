@@ -81,7 +81,9 @@ fi
 function unit_pass {
 	echo "Running unit tests..."
 	# only -run=Test so examples can run in integration tests
-	go test -timeout 3m ${COVER} ${RACE} -cpu 1,2,4 -run=Test $@ ${TEST}
+  # go test -timeout 3m ${COVER} ${RACE} -cpu 1,2,4 -run=Test $@ ${TEST}
+  go test -timeout 3m -cpu 1,2,4 -run=TestLeaderElectionPreVote $@ ${TEST}
+  # go test -timeout 3m ${COVER} ${RACE} -v -run=TestPreVoteMigration $@ ${TEST}
 }
 
 function integration_pass {
